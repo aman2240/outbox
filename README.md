@@ -30,6 +30,41 @@ demoing without spamming real inboxes.
    `preview_url` (Ethereal's hosted view of that exact message) is stored on
    the `email_jobs` row and surfaced in the frontend's Sent Emails table.
 
+### Setting up Google OAuth (login)
+
+1. In [Google Cloud Console](https://console.cloud.google.com/), create (or
+   pick) a project, then go to **APIs & Services → OAuth consent screen** and
+   configure it (External is fine for testing; add your own Google account
+   as a test user if the app is left in "Testing" publish status).
+2. Go to **APIs & Services → Credentials → Create Credentials → OAuth client
+   ID**, application type **Web application**.
+3. Add an **Authorized redirect URI**: `http://localhost:4000/auth/google/callback`
+   (must match `GOOGLE_CALLBACK_URL` exactly).
+4. Copy the generated Client ID and Client Secret into `.env`:
+   `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`.
+5. Restart the backend. Until these are set, `/auth/google` responds `501`
+   and the server logs a warning on boot instead of crashing — Google login
+   is optional at boot, not a hard dependency.
+
+### Setting up Slack OAuth (per-user "Connect Slack")
+
+1. Go to [api.slack.com/apps](https://api.slack.com/apps) → **Create New App**
+   → From scratch.
+2. Under **OAuth & Permissions**, add a redirect URL:
+   `http://localhost:4000/slack/callback` (must match `SLACK_REDIRECT_URI`).
+3. Under **Incoming Webhooks**, toggle it on — this is what grants the
+   `incoming-webhook` scope our `/slack/connect` flow requests.
+4. Under **Basic Information**, copy the **Client ID** and **Client Secret**
+   into `.env`: `SLACK_CLIENT_ID`, `SLACK_CLIENT_SECRET`.
+5. Restart the backend, log in with Google, then click "Connect Slack" in the
+   dashboard (or visit `/slack/connect` directly) — you'll be asked which
+   channel the incoming webhook should post to, then redirected back.
+6. Before this is set up, `MIN_DELAY`/rate-limit Slack notifications can
+   still be manually tested via the temporary `SLACK_TEST_WEBHOOK_URL` env
+   var from Phase 3 (a webhook URL from **Incoming Webhooks → Add New
+   Webhook to Workspace**) — this is only consulted for senders that don't
+   have an owning user yet (e.g. ones created via the old `/debug` routes).
+
 ## Architecture Overview
 
 ### Scheduling: BullMQ delayed jobs, no cron
@@ -149,6 +184,34 @@ send; the rest are visibly pushed to `status='delayed'` with `scheduled_at`
 values spread across the following hour(s) — observable both in the
 Scheduled Emails table (as "Delayed" badges) and in the BullMQ dashboard's
 delayed-job count, without needing to wait for 1000 real sends.
+
+### Authentication & Slack OAuth
+
+Google login uses `passport` + `passport-google-oauth20` with a server-side
+session (`express-session`, cookie-based). `requireAuth` middleware gates any
+route that needs a logged-in user. If `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET`
+aren't set, the app still boots — `/auth/google` just responds `501` — rather
+than making Google OAuth a hard startup dependency.
+
+Slack's per-user "Connect Slack" flow is a second, independent OAuth
+handshake (`/slack/connect` → Slack → `/slack/callback`), scoped to
+`incoming-webhook`. Since the callback lands on a public redirect URI, the
+`state` param can't be trusted as-is — it's HMAC-signed
+(`crypto.createHmac('sha256', SESSION_SECRET)`) with the initiating user's id
+before redirecting to Slack, and the signature is verified with a
+timing-safe comparison on the way back, so `/slack/callback` knows which
+user to attach the resulting webhook to without relying on the session
+cookie surviving the round trip through Slack's domain. Disconnecting is a
+soft delete (`connected=false`, row kept) so reconnecting is just flipping
+it back. `senders.owner_user_id` links a sender identity to the user who
+should be notified about it; `services/slack.ts` re-queries
+`slack_integrations` on every notification (never caches), so connect/
+disconnect take effect immediately.
+
+**Documented trade-off:** sessions are stored in-memory
+(`express-session`'s default `MemoryStore`), which is fine for a single
+backend process in local dev/demo but would need a shared store (Redis,
+via `connect-redis`) to survive a restart or run behind multiple instances.
 
 ### Elasticsearch indexing
 

@@ -1,5 +1,8 @@
+/// <reference path="./types/express.d.ts" />
 import express from "express";
 import cors from "cors";
+import session from "express-session";
+import passport from "passport";
 import { env } from "./config/env";
 import { checkPostgresConnection } from "./config/postgres";
 import { checkRedisConnection } from "./config/redis";
@@ -7,12 +10,31 @@ import { checkElasticsearchConnection } from "./config/elasticsearch";
 import { runMigrations } from "./db/migrate";
 import { reconcileJobsOnStartup } from "./services/reconciliation";
 import { startEmailWorker } from "./queues/emailWorker";
+import { configurePassport } from "./config/passport";
 import { debugRouter } from "./routes/debug";
+import { authRouter } from "./routes/auth";
+import { slackRouter } from "./routes/slack";
 
 const app = express();
 
 app.use(cors({ origin: env.frontendUrl, credentials: true }));
 app.use(express.json());
+
+app.use(
+  session({
+    secret: env.sessionSecret,
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+      secure: env.nodeEnv === "production",
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+    },
+  })
+);
+
+configurePassport();
+app.use(passport.initialize());
+app.use(passport.session());
 
 app.get("/health", async (_req, res) => {
   const [db, redisOk, elasticsearch] = await Promise.all([
@@ -24,6 +46,8 @@ app.get("/health", async (_req, res) => {
 });
 
 app.use("/debug", debugRouter);
+app.use("/auth", authRouter);
+app.use("/slack", slackRouter);
 
 async function start() {
   console.log("[boot] Checking Postgres connection...");

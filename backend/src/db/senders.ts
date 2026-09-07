@@ -8,14 +8,22 @@ export interface CreateSenderInput {
   smtp_user: string;
   smtp_pass: string;
   hourly_limit?: number;
+  owner_user_id?: string | null;
 }
 
 export async function createSender(input: CreateSenderInput): Promise<Sender> {
   const row = await queryOne<Sender>(
-    `INSERT INTO senders (name, email, smtp_user, smtp_pass, hourly_limit)
-     VALUES ($1, $2, $3, $4, $5)
+    `INSERT INTO senders (name, email, smtp_user, smtp_pass, hourly_limit, owner_user_id)
+     VALUES ($1, $2, $3, $4, $5, $6)
      RETURNING *`,
-    [input.name, input.email, input.smtp_user, input.smtp_pass, input.hourly_limit ?? env.maxEmailsPerHourPerSender]
+    [
+      input.name,
+      input.email,
+      input.smtp_user,
+      input.smtp_pass,
+      input.hourly_limit ?? env.maxEmailsPerHourPerSender,
+      input.owner_user_id ?? null,
+    ]
   );
   if (!row) throw new Error("Failed to create sender");
   return row;

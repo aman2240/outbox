@@ -72,6 +72,9 @@ async function main() {
   console.log(`status='delayed' within moments of the worker picking them up.`);
 
   await pool.end();
+  // scheduleEmailJob holds open a BullMQ Queue (and its Redis connection),
+  // which otherwise keeps this one-off script's process alive indefinitely.
+  process.exit(0);
 }
 
 main().catch((err) => {

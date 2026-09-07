@@ -1,10 +1,19 @@
 import { Job } from "bullmq";
 import { getEmailJobById, updateEmailJobStatus } from "../db/emailJobs";
+import { getSenderById } from "../db/senders";
+import { sendEmail } from "../services/email";
 import { EmailJobData } from "../types";
 
 /**
- * Phase 1: proves the scheduling pipeline end-to-end without a real send.
- * Phase 2 replaces the "would send here" branch with a real Ethereal send.
+ * Sends the real email via Ethereal (Phase 2) for a scheduled email_jobs row.
+ *
+ * Failure handling note: on a send failure this throws so BullMQ's own
+ * retry/backoff (configured on the job in scheduleEmailJob) can re-run it.
+ * We record the attempt count and error message here on every failure, but
+ * we deliberately do NOT flip status to 'failed' until retries are
+ * exhausted (handled in the Worker's 'failed' event in emailWorker.ts) —
+ * otherwise our own idempotency guard below ("must be scheduled/delayed")
+ * would reject BullMQ's own retry of the same job.
  */
 export async function processEmailJob(job: Job<EmailJobData>): Promise<void> {
   const { emailJobId } = job.data;
@@ -27,7 +36,31 @@ export async function processEmailJob(job: Job<EmailJobData>): Promise<void> {
     return;
   }
 
-  console.log(`[worker] would send here: job=${emailJobId} to=${row.recipient} subject="${row.subject}"`);
+  const sender = await getSenderById(row.sender_id);
+  if (!sender) {
+    await updateEmailJobStatus(emailJobId, {
+      status: "failed",
+      attempts: row.attempts + 1,
+      error_message: `Sender ${row.sender_id} not found`,
+    });
+    return;
+  }
 
-  await updateEmailJobStatus(emailJobId, { status: "sent", sent_at: new Date() });
+  try {
+    const result = await sendEmail(sender, row.recipient, row.subject, row.body);
+    await updateEmailJobStatus(emailJobId, {
+      status: "sent",
+      sent_at: new Date(),
+      preview_url: result.previewUrl,
+    });
+    console.log(`[worker] sent job ${emailJobId} to=${row.recipient} preview=${result.previewUrl ?? "n/a"}`);
+  } catch (err) {
+    console.error(`[worker] send failed for job ${emailJobId}:`, (err as Error).message);
+    await updateEmailJobStatus(emailJobId, {
+      status: row.status,
+      attempts: row.attempts + 1,
+      error_message: (err as Error).message,
+    });
+    throw err;
+  }
 }

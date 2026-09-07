@@ -31,6 +31,7 @@ export interface UpdateEmailJobStatusInput {
   attempts?: number;
   error_message?: string | null;
   sent_at?: Date | null;
+  preview_url?: string | null;
 }
 
 export async function updateEmailJobStatus(id: string, input: UpdateEmailJobStatusInput): Promise<EmailJob | null> {
@@ -53,6 +54,10 @@ export async function updateEmailJobStatus(id: string, input: UpdateEmailJobStat
   if (input.sent_at !== undefined) {
     sets.push(`sent_at = $${idx++}`);
     values.push(input.sent_at);
+  }
+  if (input.preview_url !== undefined) {
+    sets.push(`preview_url = $${idx++}`);
+    values.push(input.preview_url);
   }
 
   return queryOne<EmailJob>(`UPDATE email_jobs SET ${sets.join(", ")} WHERE id = $1 RETURNING *`, values);

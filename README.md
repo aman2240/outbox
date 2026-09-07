@@ -10,7 +10,25 @@ _Placeholder — finalized in Phase 9._
 
 ## Setup Instructions
 
-_Placeholder — finalized in Phase 9._
+_Full instructions finalized in Phase 9._
+
+### Setting up Ethereal Email
+
+We use [Ethereal](https://ethereal.email/) as a fake SMTP provider — it accepts
+mail like a real inbox but never delivers anywhere, and instead gives back a
+preview URL you can open to see exactly what was "sent". This is ideal for
+demoing without spamming real inboxes.
+
+1. From `/backend`, run: `npm run create-ethereal-senders`
+2. This calls `nodemailer.createTestAccount()` twice, generating two disposable
+   SMTP test accounts, and inserts both directly into the `senders` table (so
+   no manual `.env` editing is required — they immediately show up as
+   selectable senders).
+3. Credentials are printed to the console for reference; you generally don't
+   need them again since they're already stored in Postgres.
+4. Since Ethereal never delivers to a real inbox, every sent email's
+   `preview_url` (Ethereal's hosted view of that exact message) is stored on
+   the `email_jobs` row and surfaced in the frontend's Sent Emails table.
 
 ## Architecture Overview
 

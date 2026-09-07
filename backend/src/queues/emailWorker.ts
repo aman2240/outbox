@@ -4,6 +4,7 @@ import { env } from "../config/env";
 import { EMAIL_QUEUE_NAME } from "./emailQueue";
 import { EmailJobData } from "../types";
 import { processEmailJob } from "../jobs/processEmailJob";
+import { updateEmailJobStatus } from "../db/emailJobs";
 
 let worker: Worker<EmailJobData> | null = null;
 
@@ -19,8 +20,20 @@ export function startEmailWorker(): Worker<EmailJobData> {
     console.log(`[worker] completed job ${job.id}`);
   });
 
-  worker.on("failed", (job, err) => {
+  worker.on("failed", async (job, err) => {
     console.error(`[worker] job ${job?.id} failed:`, err.message);
+    if (!job) return;
+
+    const maxAttempts = job.opts.attempts ?? 1;
+    const attemptsExhausted = job.attemptsMade >= maxAttempts;
+    if (attemptsExhausted) {
+      console.error(`[worker] job ${job.id} exhausted all ${maxAttempts} attempts — marking failed permanently`);
+      try {
+        await updateEmailJobStatus(job.data.emailJobId, { status: "failed", error_message: err.message });
+      } catch (updateErr) {
+        console.error(`[worker] failed to persist terminal failure for job ${job.id}:`, updateErr);
+      }
+    }
   });
 
   worker.on("error", (err) => {

@@ -11,9 +11,11 @@ import { runMigrations } from "./db/migrate";
 import { reconcileJobsOnStartup } from "./services/reconciliation";
 import { startEmailWorker } from "./queues/emailWorker";
 import { configurePassport } from "./config/passport";
+import { ensureEmailsIndexExists } from "./services/elasticsearchIndex";
 import { debugRouter } from "./routes/debug";
 import { authRouter } from "./routes/auth";
 import { slackRouter } from "./routes/slack";
+import { emailsRouter } from "./routes/emails";
 
 const app = express();
 
@@ -48,6 +50,7 @@ app.get("/health", async (_req, res) => {
 app.use("/debug", debugRouter);
 app.use("/auth", authRouter);
 app.use("/slack", slackRouter);
+app.use("/api/emails", emailsRouter);
 
 async function start() {
   console.log("[boot] Checking Postgres connection...");
@@ -68,6 +71,9 @@ async function start() {
 
   console.log("[boot] Running migrations...");
   await runMigrations();
+
+  console.log("[boot] Ensuring Elasticsearch index exists (non-fatal if ES is unavailable)...");
+  await ensureEmailsIndexExists();
 
   console.log("[boot] Reconciling jobs from before this boot...");
   await reconcileJobsOnStartup();

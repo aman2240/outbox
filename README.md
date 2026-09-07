@@ -215,7 +215,39 @@ via `connect-redis`) to survive a restart or run behind multiple instances.
 
 ### Elasticsearch indexing
 
-_Filled in in Phase 5._
+Elasticsearch is used for **search only** — Postgres remains the single
+source of truth for every email's actual data and status. The `emails`
+index (`services/elasticsearchIndex.ts`) mirrors `recipient`, `subject`,
+`body`, `status`, `sender_id`, `scheduled_at`, and `sent_at`, using each
+`email_jobs` row's own UUID as the ES document id, so re-indexing the same
+row (which happens on every status transition) is naturally an idempotent
+upsert rather than needing separate insert/update logic.
+
+**Indexing happens synchronously at each write point** — inside
+`createEmailJob` and `updateEmailJobStatus` in `db/emailJobs.ts` — rather
+than via a separate sync job or queue. Given the scope of this assignment,
+keeping DB and ES writes co-located was simpler to reason about and
+guarantees they can never drift out of sync from a missed sync-job run; the
+trade-off is that an ES write happens synchronously on the request path (it's
+fire-and-forget in effect, since failures are caught and logged, never
+thrown — see below).
+
+**Search** (`GET /api/emails/search?q=&status=`) runs a `multi_match` query
+across `subject`/`body`/`recipient` in Elasticsearch (optionally filtered by
+`status`), takes the matched document ids, and then fetches the full,
+authoritative rows from Postgres by those ids — the API response is always
+built from Postgres data, never directly from ES documents. This was a
+deliberate choice: it means ES's document shape is free to diverge from the
+API's response shape without becoming a compatibility concern.
+
+**Degrades gracefully when Elasticsearch is unavailable** (verified
+manually, since this environment has no reachable ES cluster): server boot
+does not fail if `ensureEmailsIndexExists()` can't reach ES — it logs the
+failure and continues. Scheduling and sending emails work completely
+normally with ES down (indexing calls are wrapped in try/catch and only
+logged on failure, never thrown — a search-index outage must never block
+the actual product). The search endpoint itself returns an empty result set
+rather than a 500 when ES can't be reached.
 
 ## Features Implemented
 

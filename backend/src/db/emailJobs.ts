@@ -1,5 +1,6 @@
 import { query, queryOne } from "./client";
 import { EmailJob, EmailJobStatus } from "../types";
+import { indexEmailJob } from "../services/elasticsearchIndex";
 
 export interface CreateEmailJobInput {
   sender_id: string;
@@ -18,6 +19,7 @@ export async function createEmailJob(input: CreateEmailJobInput): Promise<EmailJ
     [input.sender_id, input.recipient, input.subject, input.body, input.scheduled_at, input.status ?? "scheduled"]
   );
   if (!row) throw new Error("Failed to create email job");
+  await indexEmailJob(row);
   return row;
 }
 
@@ -60,7 +62,9 @@ export async function updateEmailJobStatus(id: string, input: UpdateEmailJobStat
     values.push(input.preview_url);
   }
 
-  return queryOne<EmailJob>(`UPDATE email_jobs SET ${sets.join(", ")} WHERE id = $1 RETURNING *`, values);
+  const row = await queryOne<EmailJob>(`UPDATE email_jobs SET ${sets.join(", ")} WHERE id = $1 RETURNING *`, values);
+  if (row) await indexEmailJob(row);
+  return row;
 }
 
 export interface ListEmailJobsOptions {

@@ -12,6 +12,16 @@ _Placeholder — finalized in Phase 9._
 
 _Full instructions finalized in Phase 9._
 
+### BullMQ live dashboard
+
+A [bull-board](https://github.com/felixmosh/bull-board) dashboard is mounted
+at `http://localhost:4000/admin/queues`, wired to the same `email-send` queue
+everything else uses. It requires being logged in (gated behind the same
+`requireAuth` middleware as the rest of the protected API — no separate admin
+role for this assignment's scope). It shows live waiting/delayed/active/
+completed/failed counts and lets you inspect individual job payloads —
+useful for the demo video's "behavior under load" section (Phase 9).
+
 ### Setting up Ethereal Email
 
 We use [Ethereal](https://ethereal.email/) as a fake SMTP provider — it accepts

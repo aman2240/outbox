@@ -14,8 +14,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@bull-board/api": "^5.20.5",
-    "@bull-board/express": "^5.20.5",
+    "@bull-board/api": "^9.8.0",
+    "@bull-board/express": "^9.8.0",
     "@elastic/elasticsearch": "^8.15.0",
     "bullmq": "^5.12.12",
     "cors": "^2.8.5",

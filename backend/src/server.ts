@@ -11,6 +11,8 @@ import { runMigrations } from "./db/migrate";
 import { reconcileJobsOnStartup } from "./services/reconciliation";
 import { startEmailWorker } from "./queues/emailWorker";
 import { configurePassport } from "./config/passport";
+import { createBullBoardRouter } from "./config/bullBoard";
+import { requireAuth } from "./middleware/requireAuth";
 import { ensureEmailsIndexExists } from "./services/elasticsearchIndex";
 import { debugRouter } from "./routes/debug";
 import { authRouter } from "./routes/auth";
@@ -51,6 +53,7 @@ app.use("/debug", debugRouter);
 app.use("/auth", authRouter);
 app.use("/slack", slackRouter);
 app.use("/api/emails", emailsRouter);
+app.use("/admin/queues", requireAuth, createBullBoardRouter());
 
 async function start() {
   console.log("[boot] Checking Postgres connection...");

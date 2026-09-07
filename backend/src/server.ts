@@ -13,6 +13,7 @@ import { startEmailWorker } from "./queues/emailWorker";
 import { configurePassport } from "./config/passport";
 import { createBullBoardRouter } from "./config/bullBoard";
 import { requireAuth } from "./middleware/requireAuth";
+import { errorHandler } from "./middleware/errorHandler";
 import { ensureEmailsIndexExists } from "./services/elasticsearchIndex";
 import { authRouter } from "./routes/auth";
 import { slackRouter } from "./routes/slack";
@@ -54,6 +55,12 @@ app.use("/slack", slackRouter);
 app.use("/api/emails", emailsRouter);
 app.use("/api/senders", sendersRouter);
 app.use("/admin/queues", requireAuth, createBullBoardRouter());
+
+app.use((req, res) => {
+  res.status(404).json({ error: `No route for ${req.method} ${req.path}` });
+});
+
+app.use(errorHandler);
 
 async function start() {
   console.log("[boot] Checking Postgres connection...");

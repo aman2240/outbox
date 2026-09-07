@@ -6,11 +6,116 @@ Google login, and searchable send history.
 
 ## Overview
 
-_Placeholder — finalized in Phase 9._
+A full-stack system for scheduling bulk email sends ahead of time and
+tracking them through to delivery:
+
+- Upload a list of recipients (or paste a few), write a subject/body, pick a
+  sender identity and a start time, and the backend schedules one email per
+  recipient, staggered by a configurable delay.
+- Every send is backed by a BullMQ delayed job whose id is the database
+  row's own UUID — the core design goal was that **a server crash or
+  restart can never lose or duplicate a send** (see Architecture Overview →
+  Restart-persistence).
+- Each sender has an hourly send cap, enforced atomically across concurrent
+  workers via Redis; overflow is rescheduled to the next hour rather than
+  dropped, and the owning user gets exactly one Slack ping per overflow
+  event, not one per email.
+- Google login gates the dashboard; a separate per-user "Connect Slack"
+  OAuth flow wires up the notification webhook.
+- Sent/scheduled emails are indexed into Elasticsearch for full-text search,
+  with Postgres as the actual source of truth throughout.
+- A live BullMQ dashboard and a load-simulation script make it possible to
+  watch several hundred jobs move through the rate limiter without waiting
+  for real sends.
 
 ## Setup Instructions
 
-_Full instructions finalized in Phase 9._
+### Prerequisites
+
+- Node.js 20+ and npm
+- Docker (for Postgres, Redis, and Elasticsearch via `docker-compose`) — or
+  point `DATABASE_URL`/`REDIS_URL`/`ELASTICSEARCH_URL` at your own instances
+- A Google Cloud project and a Slack app, if you want real OAuth rather than
+  just running the core scheduler (both are optional at boot — see below)
+
+### 1. Start the infrastructure
+
+```bash
+docker-compose up -d
+```
+
+This starts Postgres (`localhost:5432`), Redis (`localhost:6379`), and
+Elasticsearch (`localhost:9200`), each with a healthcheck.
+
+### 2. Configure environment variables
+
+```bash
+cp .env.example .env
+```
+
+Fill in what you have — every OAuth-related var is optional at boot (see
+the env var table below). At minimum, `DATABASE_URL` and `REDIS_URL` should
+point at the services from step 1 (the `.env.example` defaults already
+match `docker-compose.yml`).
+
+### 3. Install dependencies and run migrations
+
+```bash
+cd backend
+npm install
+npm run migrate
+```
+
+### 4. Create Ethereal senders
+
+```bash
+npm run create-ethereal-senders
+```
+
+See "Setting up Ethereal Email" below for what this does.
+
+### 5. Start the backend
+
+```bash
+npm run dev
+```
+
+This runs migrations again (idempotent — already-applied ones are skipped),
+reconciles any jobs from a previous run, starts the BullMQ worker, and
+listens on `PORT` (default `4000`). Check `GET /health` to confirm
+`db`/`redis` are both `true` (`elasticsearch` is allowed to be `false` —
+search degrades gracefully without it).
+
+### 6. Start the frontend
+
+```bash
+cd ../frontend
+npm install
+npm run dev
+```
+
+Visit `http://localhost:3000`. Without Google OAuth configured you won't be
+able to log in yet — see "Setting up Google OAuth" below, or skip to it
+first if you want the full flow working from the start.
+
+### Environment variables
+
+| Variable | Description |
+|---|---|
+| `PORT` | Backend port (default `4000`) |
+| `DATABASE_URL` | Postgres connection string |
+| `REDIS_URL` | Redis connection string (used for BullMQ and rate limiting) |
+| `SESSION_SECRET` | Signs the session cookie and the Slack OAuth `state` param — set to a long random string |
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` / `GOOGLE_CALLBACK_URL` | Google OAuth login — optional at boot, `/auth/google` returns `501` until set |
+| `SLACK_CLIENT_ID` / `SLACK_CLIENT_SECRET` / `SLACK_REDIRECT_URI` | Slack OAuth "Connect Slack" — optional, `/slack/connect` returns `501` until set |
+| `SLACK_TEST_WEBHOOK_URL` | Manual pre-OAuth testing fallback (Phase 3) — only consulted for senders with no owning user |
+| `ETHEREAL_USER` / `ETHEREAL_PASS` | Not read directly by the app — informational; real sender credentials live in the `senders` table via the create-ethereal-senders script |
+| `ELASTICSEARCH_URL` | Elasticsearch endpoint — optional, search degrades gracefully if unreachable |
+| `WORKER_CONCURRENCY` | Max in-flight jobs per worker process (default `5`) |
+| `MIN_DELAY_MS_BETWEEN_SENDS` | Global pacing: at most 1 job picked up per this many ms, across the whole worker (default `2000`) |
+| `MAX_EMAILS_PER_HOUR_PER_SENDER` | Default hourly cap for a sender that doesn't specify its own (default `100`) |
+| `FRONTEND_URL` | Used for CORS and OAuth redirect targets |
+| `NEXT_PUBLIC_API_URL` | Frontend's base URL for the backend API |
 
 ### BullMQ live dashboard
 
@@ -337,12 +442,106 @@ this real API exists.
 
 ## Features Implemented
 
-_Placeholder — finalized in Phase 9._
+**Backend**
+- [x] Bulk email scheduling with per-recipient staggering (BullMQ delayed jobs, no cron)
+- [x] Restart-safe persistence & idempotency (Postgres as source of truth + boot-time reconciliation; verified against both a plain restart and a simulated Redis data loss)
+- [x] Real sending via Ethereal (nodemailer), with per-sender transporter caching and Ethereal preview URLs stored per send
+- [x] Per-sender hourly rate limiting (atomic Redis Lua script), with graceful rescheduling (never dropped/failed) to the next hour, preserving relative order
+- [x] Global send pacing (`MIN_DELAY_MS_BETWEEN_SENDS`) and configurable worker concurrency
+- [x] Slack notification on rate-limit-hit, deduplicated to one per sender per hour
+- [x] Google OAuth login (passport, sessions)
+- [x] Slack OAuth "Connect" flow per user, with signed-state CSRF protection and soft disconnect
+- [x] Elasticsearch indexing + full-text search, with graceful degradation when ES is unreachable
+- [x] Live BullMQ dashboard (`/admin/queues`), auth-gated
+- [x] Final REST API with zod input validation and clean JSON error responses (incl. a global 404/error handler)
+- [x] Load simulation script (`npm run simulate-load`) for demoing rate-limiting under load
+
+**Frontend**
+- [x] Google login flow with session-based auth guard on the dashboard
+- [x] Dashboard shell: header (user info, logout, Slack connect/disconnect), tab navigation
+- [x] Compose flow: sender select, subject/body, CSV/TXT recipient upload with invalid-entry reporting, start time + delay + hourly-limit overrides, full client-side validation
+- [x] Scheduled Emails table (merges `scheduled`+`delayed`, distinct badges) and Sent Emails table (merges `sent`+`failed`, with Ethereal preview links and error tooltips)
+- [x] Loading skeletons and empty states with calls-to-action throughout
+- [x] Search bar wired to the Elasticsearch-backed search endpoint
+- [x] Toast notifications on every failed request — nothing fails silently
+- [x] Polling-based "live" updates (documented simplification over websockets)
 
 ## Assumptions & Trade-offs
 
-_Placeholder — finalized in Phase 9._
+Being explicit about where corners were deliberately cut, given the scope
+and time budget of this assignment:
+
+- **Rate-limit windows are UTC-aligned wall-clock hours, not rolling
+  60-minute windows.** A sender could in principle send its quota at
+  `:59` and again at the top of the next hour. Simpler to implement
+  correctly under concurrency; documented in Architecture Overview.
+- **Elasticsearch indexing is synchronous, at each DB write point**, not a
+  separate sync pipeline/queue. Simpler and can't drift out of sync from a
+  missed job, at the cost of an extra (fire-and-forget, non-blocking-on-
+  failure) network call on the write path.
+- **The dashboard polls every 15s instead of using websockets** for "live"
+  updates. Meaningfully simpler for the time budget; the trade-off is a
+  ≤15s delay before a status change is visible without a manual action
+  (search/pagination change) that triggers an immediate refetch.
+- **One Slack integration per user**, not full multi-tenant/workspace
+  support — a user connects exactly one Slack webhook, used for every
+  sender they own. Matches the assignment's scope; a real multi-tenant
+  product would model teams/workspaces separately from individual users.
+- **Sessions use `express-session`'s in-memory store.** Fine for one backend
+  process in dev/demo; would need a shared store (e.g. Redis via
+  `connect-redis`) to survive a restart or run behind multiple instances.
+- **`hourlyLimit` on `POST /api/emails/schedule` updates the sender globally**,
+  not scoped to just that batch — chosen since senders are shared, named
+  identities rather than a per-request construct. Documented in the API
+  reference.
+- **Sent and failed emails share one frontend tab**, distinguished by badge
+  color, rather than a separate filter toggle — both are "done processing"
+  from the user's point of view.
+- **CSV/TXT recipient parsing** supports a bare list of addresses and a CSV
+  with an `email` header column, chosen as the two most common real-world
+  shapes; anything else (multi-column CSVs without an `email` header, for
+  instance) isn't specially handled.
+- **This build environment had no reachable Elasticsearch cluster, no
+  outbound access to raw SMTP ports, and no real Google/Slack OAuth
+  credentials.** Every piece of code that depends on those was still
+  written for and tested against the real protocols/APIs (Ethereal SMTP via
+  nodemailer, Slack's real `oauth.v2.access` endpoint, Google's real OAuth2
+  flow via `passport-google-oauth20`), and the *failure paths* for each were
+  exercised directly and fixed where they surfaced real bugs (see the two
+  callouts in Architecture Overview — the rate-limiter retry bug and the
+  Elasticsearch client's slow-search bug). What could not be verified here
+  is a successful Ethereal send landing with a real preview URL, or a full
+  live OAuth round trip through Google's/Slack's actual consent screens —
+  both should work as soon as this runs somewhere with normal outbound
+  network access and real credentials in `.env`, per the setup steps above.
 
 ## Demo Video
 
 _Placeholder — link added after recording._
+
+Suggested outline (aim for under 5 minutes):
+
+1. **Compose flow** — log in with Google, open Compose, upload a CSV of a
+   few recipients, show the detected/skipped count, set a start time a
+   minute or two out, submit, and show the success toast + the new rows in
+   Scheduled Emails.
+2. **Scheduled → Sent transition** — wait for the scheduled time to pass,
+   show the rows move to the Sent Emails tab, and open one's Ethereal
+   preview link to show the actual "sent" email content.
+3. **Restart safety** — schedule another email a short time out, stop the
+   backend process mid-countdown, restart it, and point at the boot log's
+   `Reconciliation: ... re-queued ...` line, then show the email still
+   arrives once, not zero or two times.
+4. **Rate limiting + Slack** — either run `npm run simulate-load` or
+   temporarily lower `MAX_EMAILS_PER_HOUR_PER_SENDER` and schedule a
+   handful of emails for one sender; show jobs flip to "Delayed" in the
+   table or the BullMQ dashboard's delayed count, and show the single Slack
+   notification that fired.
+5. **Search** — type a keyword from one of the demo emails into the search
+   bar and show it filtering the table via Elasticsearch.
+
+---
+
+Before submitting: create a private GitHub repo (if not already), grant
+access to the required reviewers, push this branch/main, and fill in the
+submission form with the repo link and this demo video link.

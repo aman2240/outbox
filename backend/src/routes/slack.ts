@@ -106,14 +106,24 @@ slackRouter.get("/callback", async (req, res) => {
 });
 
 slackRouter.get("/status", requireAuth, async (req, res) => {
-  const integration = await getSlackIntegrationByUserId(req.user!.id);
-  res.json({
-    connected: !!integration?.connected,
-    teamName: integration?.team_name ?? null,
-  });
+  try {
+    const integration = await getSlackIntegrationByUserId(req.user!.id);
+    res.json({
+      connected: !!integration?.connected,
+      teamName: integration?.team_name ?? null,
+    });
+  } catch (err) {
+    console.error("[slack] status check failed:", err);
+    res.status(500).json({ error: "Failed to check Slack status" });
+  }
 });
 
 slackRouter.post("/disconnect", requireAuth, async (req, res) => {
-  await setSlackIntegrationConnected(req.user!.id, false);
-  res.json({ ok: true });
+  try {
+    await setSlackIntegrationConnected(req.user!.id, false);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("[slack] disconnect failed:", err);
+    res.status(500).json({ error: "Failed to disconnect Slack" });
+  }
 });

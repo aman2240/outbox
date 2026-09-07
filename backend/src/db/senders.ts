@@ -37,10 +37,6 @@ export async function getSenderById(id: string): Promise<Sender | null> {
   return queryOne<Sender>("SELECT * FROM senders WHERE id = $1", [id]);
 }
 
-export async function getAnySender(): Promise<Sender | null> {
-  return queryOne<Sender>("SELECT * FROM senders ORDER BY created_at ASC LIMIT 1");
-}
-
 export async function updateSenderHourlyLimit(id: string, hourlyLimit: number): Promise<void> {
   await query("UPDATE senders SET hourly_limit = $2 WHERE id = $1", [id, hourlyLimit]);
 }

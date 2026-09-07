@@ -14,10 +14,10 @@ import { configurePassport } from "./config/passport";
 import { createBullBoardRouter } from "./config/bullBoard";
 import { requireAuth } from "./middleware/requireAuth";
 import { ensureEmailsIndexExists } from "./services/elasticsearchIndex";
-import { debugRouter } from "./routes/debug";
 import { authRouter } from "./routes/auth";
 import { slackRouter } from "./routes/slack";
 import { emailsRouter } from "./routes/emails";
+import { sendersRouter } from "./routes/senders";
 
 const app = express();
 
@@ -49,10 +49,10 @@ app.get("/health", async (_req, res) => {
   res.json({ status: "ok", db, redis: redisOk, elasticsearch });
 });
 
-app.use("/debug", debugRouter);
 app.use("/auth", authRouter);
 app.use("/slack", slackRouter);
 app.use("/api/emails", emailsRouter);
+app.use("/api/senders", sendersRouter);
 app.use("/admin/queues", requireAuth, createBullBoardRouter());
 
 async function start() {

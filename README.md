@@ -259,6 +259,40 @@ logged on failure, never thrown — a search-index outage must never block
 the actual product). The search endpoint itself returns an empty result set
 rather than a 500 when ES can't be reached.
 
+## API Reference
+
+All routes are prefixed with the backend's base URL (`http://localhost:4000`
+by default). "Auth" = requires an active logged-in session
+(`requireAuth` middleware) — a request without one gets `401`.
+
+| Method | Path | Auth | Request body | Response |
+|---|---|---|---|---|
+| GET | `/health` | No | — | `{ status, db, redis, elasticsearch }` |
+| GET | `/auth/google` | No | — | Redirects to Google's OAuth consent screen (`501` if not configured) |
+| GET | `/auth/google/callback` | No | — | Redirects to `FRONTEND_URL/dashboard` on success |
+| GET | `/auth/me` | Auth | — | `{ user: User }` (`401` if not logged in) |
+| POST | `/auth/logout` | No | — | `{ ok: true }`, destroys the session |
+| GET | `/slack/connect` | Auth | — | Redirects to Slack's OAuth authorize screen (`501` if not configured) |
+| GET | `/slack/callback` | No† | — | Redirects to `FRONTEND_URL/dashboard?slack=connected\|error` |
+| GET | `/slack/status` | Auth | — | `{ connected: boolean, teamName: string \| null }` |
+| POST | `/slack/disconnect` | Auth | — | `{ ok: true }` |
+| POST | `/api/emails/schedule` | Auth | `{ senderId, subject, body, recipients: string[], startTime, delayBetweenEmailsMs, hourlyLimit? }` | `{ count, jobIds: string[] }` (`400` with `{ error, issues }` on validation failure) |
+| GET | `/api/emails?status=&page=&pageSize=` | Auth | — | `{ results: EmailJob[], total, page, pageSize }` |
+| GET | `/api/emails/search?q=&status=` | Auth | — | `{ results: EmailJob[] }` |
+| GET | `/api/senders` | Auth | — | `{ senders: Sender[] }` |
+| GET | `/admin/queues` | Auth | — | BullMQ live dashboard (HTML) |
+
+† `/slack/callback` isn't gated by `requireAuth` since it's a redirect target
+from Slack's servers — it instead verifies the signed `state` param (see
+Architecture Overview → Authentication & Slack OAuth) to determine which
+user to attach the integration to.
+
+`status` on `GET /api/emails` accepts a comma-separated list (e.g.
+`scheduled,delayed`) so the frontend can merge statuses into one tab.
+
+The temporary `/debug/*` routes from Phases 1–3 have been removed now that
+this real API exists.
+
 ## Features Implemented
 
 _Placeholder — finalized in Phase 9._

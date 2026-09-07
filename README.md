@@ -259,6 +259,48 @@ logged on failure, never thrown — a search-index outage must never block
 the actual product). The search endpoint itself returns an empty result set
 rather than a 500 when ES can't be reached.
 
+### Frontend
+
+Next.js App Router, all client-rendered (no server components hold app
+state — the backend is a separate origin, so there's nothing for the
+server-rendering to buy here beyond the static shell).
+
+- `lib/api.ts` — a single typed fetch wrapper with `credentials: 'include'`
+  baked in (so the session cookie rides along cross-origin) and a typed
+  method per backend route. Every failed request throws `ApiError` with the
+  backend's actual error message, which every call site catches and routes
+  to a toast — nothing fails silently.
+- `components/AuthContext.tsx` — calls `GET /auth/me` once on the dashboard
+  layout mounting; a `401` redirects to `/login`. This is the auth guard for
+  the entire `/dashboard` subtree.
+- `lib/useEmailsQuery.ts` — the shared data-fetching hook behind both
+  tables: fetches on mount/dependency-change, polls every 15s for a "live"
+  feel (a documented simplification over websockets — see Assumptions &
+  Trade-offs), and guards against a slow, now-stale request clobbering a
+  fresher one if the user changes the search box again before the first
+  response lands.
+- `lib/parseRecipients.ts` — CSV/TXT parsing via `papaparse`, supporting
+  both a bare list of addresses and a CSV with an `email` header column;
+  invalid entries are counted and surfaced, not silently dropped, and
+  duplicates are de-duplicated case-insensitively.
+- Sent and failed emails share one "Sent Emails" tab (distinguished by
+  badge color) rather than a separate filter toggle — simpler for this
+  assignment's scope; a `View` link opens the Ethereal preview for sent
+  mail, a hoverable `Error` badge shows the failure reason for failed mail.
+
+**Bug found and fixed while testing this in a real browser (not just
+typechecking):** the Elasticsearch JS client's default retry/backoff made
+`GET /api/emails/search` take ~7 seconds to respond whenever ES was
+unreachable (retries with backoff on the *read* path, while the *write*
+path used by indexing failed instantly) — long enough that the frontend's
+loading state looked permanently stuck. Fixed by setting `maxRetries: 0` and
+a short `requestTimeout` on the ES client (`config/elasticsearch.ts`), so
+every ES call now fails fast and consistently, matching the "degrades
+gracefully" behavior the rest of the system already had. This is exactly
+the kind of thing that only surfaces by actually clicking through the UI —
+recorded here as a reminder that a green typecheck isn't the same as a
+working feature.
+
 ## API Reference
 
 All routes are prefixed with the backend's base URL (`http://localhost:4000`

@@ -78,7 +78,77 @@ once.
 
 ### Rate limiting & concurrency
 
-_Filled in in Phase 3._
+Three separate mechanisms cooperate here:
+
+- **Minimum delay between sends** (`MIN_DELAY_MS_BETWEEN_SENDS`): applied via
+  BullMQ's built-in Worker `limiter: { max: 1, duration }` option. This paces
+  overall throughput across the *whole* worker — at most one job is picked up
+  per window, regardless of concurrency. It's global pacing, not per-sender.
+- **Configurable concurrency** (`WORKER_CONCURRENCY`): how many jobs the
+  Worker can have in-flight at once, independent of the pacing above.
+- **Per-sender hourly cap** (`senders.hourly_limit`, falling back to
+  `MAX_EMAILS_PER_HOUR_PER_SENDER` when a sender doesn't specify one at
+  creation time): enforced with a Redis Lua script
+  (`checkAndIncrementSenderHourlyCount` in `services/rateLimiter.ts`) that
+  atomically reads-and-increments a counter keyed
+  `ratelimit:{senderId}:{YYYYMMDDHH}` (UTC hour bucket). Doing the
+  check-then-increment as one Lua script — rather than separate `GET`/`INCR`
+  calls — is what makes it safe across multiple concurrent workers/jobs: two
+  jobs can never both slip through as "under the limit" and overshoot it.
+
+**When a sender's hourly cap is hit:** the job is never dropped or failed. It's
+pushed into the next UTC hour window, at the same offset-into-the-hour as its
+original `scheduled_at` (so relative ordering among rescheduled jobs is
+preserved), via BullMQ's native "delay a job from inside its own processor"
+pattern: `job.moveToDelayed(newTimestamp, token)` followed by throwing
+`DelayedError`. This tells BullMQ "this is an intentional pause," not a
+failure — no `failed` event fires and no retry attempt is consumed.
+
+**Slack notification on limit-hit:** fires once per sender-per-hour, not once
+per overflowing job (there can be hundreds queued at the same instant). This
+is guarded by a separate Redis key, `ratelimit:notified:{senderId}:{hour}`,
+claimed with `SET ... NX EX 3600` — only the first job to hit the limit in
+that window wins the claim and sends the notification.
+
+**A bug we found and fixed while testing this manually:** the rate-limit
+check must only run on a job's *first* attempt at sending
+(`job.attemptsMade === 0`), not on every BullMQ-driven retry after a
+transient send failure. Without that guard, a job that was already correctly
+"allowed" (and counted) could get re-checked on retry, find the counter now
+at the limit (because other jobs used the remaining slots while it was
+retrying), and get wrongly bumped to the next hour — even though it had
+already claimed its slot. `DelayedError` reschedules don't increment
+`attemptsMade`, so a job that legitimately gets pushed to the next hour still
+looks like attempt 0 when it wakes up there, and correctly gets re-checked
+against that new hour's count.
+
+**Documented trade-off:** hour buckets are UTC-aligned wall-clock hours
+(`00:00–00:59`, `01:00–01:59`, ...), not a rolling 60-minute window from each
+individual send. A sender could in principle send its full hourly quota at
+`00:59` and again at `01:00`, a 1-minute burst of double the nominal rate.
+This is simpler to reason about and implement correctly under concurrency
+than a true sliding window, and was an explicit scope trade-off for this
+assignment.
+
+**Manually verified:** `MAX_EMAILS_PER_HOUR_PER_SENDER=3`, 5 jobs scheduled
+for the same sender within milliseconds of each other. Jobs 1–3 were
+allowed; jobs 4–5 were immediately moved to `status='delayed'` with
+`scheduled_at` pushed to the next UTC hour. Exactly one Slack webhook call
+fired (message: `hit its hourly limit (3/3)`), not five. Retried sends for
+jobs 1–3 (which then failed for an unrelated reason — no real SMTP egress in
+the dev sandbox this was built in) correctly did *not* re-trigger the
+rate-limit path on retry.
+
+### Behavior under load
+
+`src/scripts/simulate-load.ts` (Phase 9) creates ~1000 `email_jobs` rows all
+scheduled at (or very near) the same timestamp, for a single sender with a
+deliberately low `hourly_limit`, and schedules each through the normal
+`scheduleEmailJob` path. Within the first hour, only `hourly_limit` of them
+send; the rest are visibly pushed to `status='delayed'` with `scheduled_at`
+values spread across the following hour(s) — observable both in the
+Scheduled Emails table (as "Delayed" badges) and in the BullMQ dashboard's
+delayed-job count, without needing to wait for 1000 real sends.
 
 ### Elasticsearch indexing
 

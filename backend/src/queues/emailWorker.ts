@@ -14,6 +14,12 @@ export function startEmailWorker(): Worker<EmailJobData> {
   worker = new Worker<EmailJobData>(EMAIL_QUEUE_NAME, processEmailJob, {
     connection: createRedisConnection(),
     concurrency: env.workerConcurrency,
+    // Global send pacing: caps this worker to picking up at most 1 job per
+    // MIN_DELAY_MS_BETWEEN_SENDS, regardless of concurrency. This is the
+    // "minimum delay between individual sends" requirement — it throttles
+    // overall throughput across the whole worker, not per-sender (that's
+    // handled separately by the per-sender hourly cap in rateLimiter.ts).
+    limiter: { max: 1, duration: env.minDelayMsBetweenSends },
   });
 
   worker.on("completed", (job) => {
